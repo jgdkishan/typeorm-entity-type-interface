@@ -42,7 +42,7 @@ npx typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces
 ## Features
 **Generates Interfaces:** Creates TypeScript interfaces for each TypeORM entity.
 
-**Excludes Relations:** Skips properties decorated with relation decorators (@OneToMany, @ManyToOne, etc.).
+**Include Relations:** Creates TypeScript interfaces for properties decorated with relation decorators (@OneToMany, @ManyToOne, etc.).
 
 **Handles Optionals:** Correctly marks optional properties.
 
