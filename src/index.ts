@@ -5,6 +5,7 @@ import {
     StructureKind,
     InterfaceDeclarationStructure,
     PropertySignatureStructure,
+    EnumDeclarationStructure,
 } from 'ts-morph';
 import { Command } from 'commander';
 import * as path from 'path';
@@ -25,11 +26,18 @@ const options = program.opts();
 const project = new Project();
 
 const inputPattern = path.resolve(options.input);
-const outputFilePath = path.resolve(options.output);
+let outputFilePath = path.resolve(options.output);
 const usePrefix = options.prefix !== false;
 const verbose = options.verbose !== false;
+
+// Check if output path ends with ".ts"; if not, treat it as a directory and append "IEntity.ts"
+if (!outputFilePath.endsWith('.ts')) {
+    outputFilePath = path.join(outputFilePath, 'IEntity.ts');
+}
+
 const outputDir = path.dirname(outputFilePath);
 
+// Ensure the output directory exists
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }
@@ -42,9 +50,30 @@ if (sourceFiles.length === 0) {
 }
 
 const interfaceMap = new Map<string, string>();
+const enumMap = new Map<string, EnumDeclarationStructure>();
 
-// First pass: collect class names and map to interfaces
+// First pass: collect class names and map to interfaces, and collect enums
 sourceFiles.forEach((sourceFile) => {
+    // Collect enums
+    sourceFile.getEnums().forEach((enumDeclaration) => {
+        const enumName = enumDeclaration.getName();
+        if (enumName) {
+            const enumMembers = enumDeclaration.getMembers().map((member) => ({
+                name: member.getName(),
+                initializer: member.getInitializer()?.getText(),
+            }));
+
+            const enumStructure: EnumDeclarationStructure = {
+                kind: StructureKind.Enum,
+                name: enumName,
+                members: enumMembers,
+                isExported: true,
+            };
+
+            enumMap.set(enumName, enumStructure);
+        }
+    });
+
     sourceFile.getClasses().forEach((classDeclaration) => {
         const className = classDeclaration.getName();
         if (className) {
@@ -54,8 +83,9 @@ sourceFiles.forEach((sourceFile) => {
     });
 });
 
-// Prepare to collect all interfaces
+// Prepare to collect all interfaces and enums
 const allInterfaces: InterfaceDeclarationStructure[] = [];
+const allEnums: EnumDeclarationStructure[] = Array.from(enumMap.values());
 
 // Second pass: generate interfaces
 sourceFiles.forEach((sourceFile) => {
@@ -77,31 +107,35 @@ sourceFiles.forEach((sourceFile) => {
             const decorators = prop.getDecorators().map((dec) => dec.getName());
             const isOptional = prop.hasQuestionToken();
 
+            let propTypeNode = prop.getTypeNode();
             let propType = prop.getType().getText();
 
+            // Handle enum types
+            const typeSymbol = prop.getType().getSymbol();
+            if (typeSymbol && typeSymbol.getDeclarations().some(d => d.getKindName() === 'EnumDeclaration')) {
+                const enumName = typeSymbol.getName();
+                if (enumMap.has(enumName)) {
+                    propType = enumName;
+                } else {
+                    // Handle enums imported from other files
+                    propType = enumName;
+                }
+            }
+
             // Handle relation types
-            const relationDecorators = [
-                'OneToMany',
-                'ManyToOne',
-                'OneToOne',
-                'ManyToMany',
-            ];
-            const hasRelation = decorators.some((dec) =>
-                relationDecorators.includes(dec)
-            );
+            const relationDecorators = ['OneToMany', 'ManyToOne', 'OneToOne', 'ManyToMany'];
+            const hasRelation = decorators.some((dec) => relationDecorators.includes(dec));
 
             if (hasRelation) {
                 // Get the type of the related entity
-                const typeNode = prop.getTypeNode();
-                if (typeNode && typeNode.getText().includes('Promise')) {
+                if (propTypeNode && propTypeNode.getText().includes('Promise')) {
                     // Lazy relations
-                    const typeArguments = typeNode.getType().getTypeArguments();
+                    const typeArguments = propTypeNode.getType().getTypeArguments();
                     if (typeArguments.length > 0) {
                         const relatedType = typeArguments[0];
                         const relatedEntityName = relatedType.getSymbol()?.getName();
                         if (relatedEntityName) {
-                            const relatedInterfaceName =
-                                interfaceMap.get(relatedEntityName) || relatedEntityName;
+                            const relatedInterfaceName = interfaceMap.get(relatedEntityName) || relatedEntityName;
                             propType = `Promise<${relatedInterfaceName}Data>`;
                         } else {
                             propType = 'any';
@@ -113,8 +147,7 @@ sourceFiles.forEach((sourceFile) => {
                     const elementType = type.getArrayElementType() || type;
                     const relatedEntityName = elementType.getSymbol()?.getName();
                     if (relatedEntityName) {
-                        const relatedInterfaceName =
-                            interfaceMap.get(relatedEntityName) || relatedEntityName;
+                        const relatedInterfaceName = interfaceMap.get(relatedEntityName) || relatedEntityName;
                         if (type.isArray()) {
                             propType = `${relatedInterfaceName}Data[]`;
                         } else {
@@ -159,10 +192,10 @@ sourceFiles.forEach((sourceFile) => {
     });
 });
 
-// Create a new source file for all interfaces
+// Create a new source file for all enums and interfaces
 const interfacesFile = project.createSourceFile(
     outputFilePath,
-    { statements: allInterfaces },
+    { statements: [...allEnums, ...allInterfaces] },
     { overwrite: true }
 );
 
