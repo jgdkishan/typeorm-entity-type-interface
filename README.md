@@ -36,7 +36,7 @@ npm run generate-interfaces
 Generate interfaces from entities in `./src/entities/**.ts` and output them to `./src/interfaces`:
 
 ```bash
-npx typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces
+typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces
 ```
 
 ## Features
