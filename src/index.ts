@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
-import { Project, StructureKind, InterfaceDeclarationStructure, PropertySignatureStructure } from 'ts-morph';
+import {
+    Project,
+    StructureKind,
+    InterfaceDeclarationStructure,
+    PropertySignatureStructure,
+} from 'ts-morph';
 import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -9,7 +14,7 @@ const program = new Command();
 
 program
     .requiredOption('-i, --input <glob>', 'Input glob pattern for TypeORM entities')
-    .requiredOption('-o, --output <path>', 'Output directory for interfaces')
+    .requiredOption('-o, --output <path>', 'Output file path for interfaces')
     .option('--no-prefix', 'Do not prefix interface names with "I"')
     .option('-v, --verbose', 'Enable verbose output', true);
 
@@ -20,15 +25,15 @@ const options = program.opts();
 const project = new Project();
 
 const inputPattern = path.resolve(options.input);
-const outputDir = path.resolve(options.output);
+const outputFilePath = path.resolve(options.output);
 const usePrefix = options.prefix !== false;
 const verbose = options.verbose !== false;
+const outputDir = path.dirname(outputFilePath);
 
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }
 
-// Read all .ts files matching the input glob pattern
 const sourceFiles = project.addSourceFilesAtPaths(inputPattern);
 
 if (sourceFiles.length === 0) {
@@ -49,6 +54,9 @@ sourceFiles.forEach((sourceFile) => {
     });
 });
 
+// Prepare to collect all interfaces
+const allInterfaces: InterfaceDeclarationStructure[] = [];
+
 // Second pass: generate interfaces
 sourceFiles.forEach((sourceFile) => {
     sourceFile.getClasses().forEach((classDeclaration) => {
@@ -56,11 +64,15 @@ sourceFiles.forEach((sourceFile) => {
         if (!className) return;
 
         const interfaceName = interfaceMap.get(className) as string;
+        const interfaceNameData = `${interfaceName}Data`;
 
         // Collect properties
         const properties = classDeclaration.getProperties();
 
-        const interfaceProperties: PropertySignatureStructure[] = properties.map((prop) => {
+        const interfaceProperties: PropertySignatureStructure[] = [];
+        const interfaceDataProperties: PropertySignatureStructure[] = [];
+
+        properties.forEach((prop) => {
             const propName = prop.getName();
             const decorators = prop.getDecorators().map((dec) => dec.getName());
             const isOptional = prop.hasQuestionToken();
@@ -68,8 +80,15 @@ sourceFiles.forEach((sourceFile) => {
             let propType = prop.getType().getText();
 
             // Handle relation types
-            const relationDecorators = ['OneToMany', 'ManyToOne', 'OneToOne', 'ManyToMany'];
-            const hasRelation = decorators.some((dec) => relationDecorators.includes(dec));
+            const relationDecorators = [
+                'OneToMany',
+                'ManyToOne',
+                'OneToOne',
+                'ManyToMany',
+            ];
+            const hasRelation = decorators.some((dec) =>
+                relationDecorators.includes(dec)
+            );
 
             if (hasRelation) {
                 // Get the type of the related entity
@@ -81,8 +100,9 @@ sourceFiles.forEach((sourceFile) => {
                         const relatedType = typeArguments[0];
                         const relatedEntityName = relatedType.getSymbol()?.getName();
                         if (relatedEntityName) {
-                            const relatedInterfaceName = interfaceMap.get(relatedEntityName) || relatedEntityName;
-                            propType = `Promise<${relatedInterfaceName}>`;
+                            const relatedInterfaceName =
+                                interfaceMap.get(relatedEntityName) || relatedEntityName;
+                            propType = `Promise<${relatedInterfaceName}Data>`;
                         } else {
                             propType = 'any';
                         }
@@ -93,11 +113,12 @@ sourceFiles.forEach((sourceFile) => {
                     const elementType = type.getArrayElementType() || type;
                     const relatedEntityName = elementType.getSymbol()?.getName();
                     if (relatedEntityName) {
-                        const relatedInterfaceName = interfaceMap.get(relatedEntityName) || relatedEntityName;
+                        const relatedInterfaceName =
+                            interfaceMap.get(relatedEntityName) || relatedEntityName;
                         if (type.isArray()) {
-                            propType = `${relatedInterfaceName}[]`;
+                            propType = `${relatedInterfaceName}Data[]`;
                         } else {
-                            propType = relatedInterfaceName;
+                            propType = `${relatedInterfaceName}Data`;
                         }
                     } else {
                         propType = 'any';
@@ -105,59 +126,49 @@ sourceFiles.forEach((sourceFile) => {
                 }
             }
 
-            return {
+            const propertySignature: PropertySignatureStructure = {
                 name: propName,
                 type: propType,
                 hasQuestionToken: isOptional,
                 kind: StructureKind.PropertySignature,
             };
+
+            if (!hasRelation) {
+                interfaceProperties.push(propertySignature);
+            }
+
+            interfaceDataProperties.push(propertySignature);
         });
 
-        // Create interface
-        const interfaceStructure: InterfaceDeclarationStructure = {
+        // Create interfaces
+        const entityInterface: InterfaceDeclarationStructure = {
             kind: StructureKind.Interface,
             name: interfaceName,
             properties: interfaceProperties,
             isExported: true,
         };
 
-        // Create a new source file for the interface
-        const interfaceFilePath = path.join(outputDir, `${interfaceName}.ts`);
-        const interfaceFile = project.createSourceFile(
-            interfaceFilePath,
-            { statements: [interfaceStructure] },
-            { overwrite: true }
-        );
+        const entityDataInterface: InterfaceDeclarationStructure = {
+            kind: StructureKind.Interface,
+            name: interfaceNameData,
+            properties: interfaceDataProperties,
+            isExported: true,
+        };
 
-        // Add import statements for related interfaces
-        const imports: Set<string> = new Set();
-
-        interfaceProperties.forEach((prop) => {
-            const propType = prop.type as string;
-            const typeNames = propType.match(/(?:Promise<)?([A-Za-z0-9_]+)(?:\[\])?>?/g) || [];
-            typeNames.forEach((typeName) => {
-                const cleanType = typeName.replace(/(\[\])|Promise<|>/g, '');
-                if (interfaceMap.has(cleanType) && cleanType !== interfaceName) {
-                    imports.add(cleanType);
-                }
-            });
-        });
-
-        if (imports.size > 0) {
-            interfaceFile.addImportDeclarations(
-                Array.from(imports).map((importName) => ({
-                    namedImports: [importName],
-                    moduleSpecifier: `./${importName}`,
-                    isTypeOnly: true,
-                }))
-            );
-        }
-
-        // Save the file
-        interfaceFile.saveSync();
-
-        if (verbose) {
-            console.log(`Generated interface for ${className}: ${interfaceFilePath}`);
-        }
+        allInterfaces.push(entityInterface, entityDataInterface);
     });
 });
+
+// Create a new source file for all interfaces
+const interfacesFile = project.createSourceFile(
+    outputFilePath,
+    { statements: allInterfaces },
+    { overwrite: true }
+);
+
+// Save the file
+interfacesFile.saveSync();
+
+if (verbose) {
+    console.log(`Generated interfaces file: ${outputFilePath}`);
+}

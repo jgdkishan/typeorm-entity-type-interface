@@ -16,7 +16,7 @@ Add a Script to Your package.json
 
 ```json
 "scripts": {
-  "generate-entity-interfaces": "typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces"
+  "generate-entity-interfaces": "typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces/IEntities.ts"
 }
 ```
 
@@ -28,25 +28,38 @@ npm run generate-interfaces
 
 #### Command-Line Options
 
-`-i, --input <path>: (Required) Input directory containing TypeORM entities.`
+`-i, --input <glob>`: (Required) Input directory containing TypeORM entities.
 
-`-o, --output <path>: (Required) Output directory for generated interfaces.`
+`-o, --output <path>`: (Required) Output directory for generated interfaces.`
+
+`--no-prefix`: Do not prefix interface names with 'I'.
+
+`-v, --verbose`: Enable verbose output (enabled by default).
 
 ## Example
-Generate interfaces from entities in `./src/entities/**.ts` and output them to `./src/interfaces`:
+Generate interfaces from entities in `./src/entities/**.ts` and output them to `./src/interfaces/IEntities.ts`:
 
 ```bash
-typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces
+typeorm-entity-type-interface -i ./src/entities -o ./src/interfaces/IEntities.ts
 ```
 
 ## Features
-**Generates Interfaces:** Creates TypeScript interfaces for each TypeORM entity.
 
-**Include Relations:** Creates TypeScript interfaces for properties decorated with relation decorators (@OneToMany, @ManyToOne, etc.).
+* **Generates Interfaces:** Creates TypeScript interfaces for each TypeORM entity.
 
-**Handles Optionals:** Correctly marks optional properties.
+* **Include Relations:** Creates TypeScript interfaces for properties decorated with relation decorators (@OneToMany, @ManyToOne, etc.).
+
+* **Dual Interfaces per Entity:**
+    * `EntityName`: Properties excluding relations.
+    * `EntityNameData`: Properties including relations.
+
+* **Handles Relations:** Relation properties are included in EntityNameData interfaces.
+
+* **Verbosity:** Provides verbose output by default.
+
 
 ## Limitations
+
 **Custom Types:** Complex or custom property types may require additional handling.
 
 **Methods Ignored:** Only class properties are converted; methods are ignored.
